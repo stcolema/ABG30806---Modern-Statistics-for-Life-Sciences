@@ -72,6 +72,77 @@ plot_fitted_errors <- function(model, data, x_var, y_var,
   return(p)
 }
 
+plot_studentised_residuals <- function(model, data, response,
+                                       title = "Studentised Residuals") {
+
+  # Inspect fitted values
+  predictions <- fitted(model)
+  residuals <- rstudent(model) # studentised residuals
+  comp_df <- data.frame(
+    actual = data[[response]],
+    fitted = predictions,
+    studentised_residuals = residuals,
+    errors = data[[response]] - predictions,
+    index = 1:nrow(data)
+  )
+
+
+  # Plot residuals
+  ggplot(data = comp_df, aes(x = index, y = studentised_residuals)) +
+    geom_point(colour = "blue") +
+    geom_abline(intercept = 0, slope = 0, colour = "darkolivegreen") +
+    geom_segment(xend = comp_df$index, yend = 0) +
+    ylim(-3, 3) +
+    labs(
+      title = title,
+      x = "Index",
+      y = "Studentised residuals"
+    ) +
+    geom_hline(yintercept = c(-3, 3), linetype = 2, colour = "red") +
+    geom_hline(yintercept = c(-2, 2), linetype = 8, colour = "plum")
+}
+
+# Converts string to sentence case
+proper_case <- function(x) {
+  paste0(toupper(substr(x, 1, 1)), tolower(substring(x, 2)))
+}
+
+# Compare the fit of two different models on the same plot
+compare_fits <- function(model_1, model_2, data, response, covariate,
+                         title = "Comparison of fits",
+                         xlab = covariate,
+                         ylab = response,
+                         model_1_name = "Model_1",
+                         model_2_name = "Model_2",
+                         model_1_colour = "blue",
+                         model_2_colour = "red") {
+
+  # Not used, but worth remembering for the future
+  if (FALSE) {
+    xlab <- proper_case(covariate) %>%
+      gsub("_", " ", .)
+
+    ylab <- proper_case(response) %>%
+      gsub("_", " ", .)
+  }
+
+  # Compare fits
+  ggplot(data = data, mapping = aes_string(x = covariate, y = response)) +
+    geom_point() +
+    geom_line(aes(y = fitted(model_1), colour = model_1_name)) +
+    geom_line(aes(y = fitted(model_2), colour = model_2_name)) +
+    labs(
+      title = title,
+      x = xlab,
+      y = ylab
+    ) +
+    scale_colour_manual(
+      name = "Model",
+      values = c(model_1_colour, model_2_colour)
+    )
+}
+
+
 # === Main code ================================================================
 
 # === Data input ===============================================================
@@ -89,9 +160,13 @@ insect_dose <- tribble(
   1.8839,           60,         60
 )
 
-# Add proportion variable
+# Add proportion variable and number of insects that are alive (could use
+# num_insects as weights instead)
 insect_dose %<>%
-  mutate(prop_dead = num_died / num_insects)
+  mutate(
+    prop_dead = num_died / num_insects,
+    num_alive = num_insects - num_died
+  )
 
 # === Linear regression ========================================================
 # Build model
@@ -130,43 +205,23 @@ p_loess <- plot_fitted_errors(loess_mod, insect_dose, "dose", "prop_dead",
   y_name = "Proportion of sample dead"
 )
 
-# Compare LM fit with LOESS fit in single graph
-ggplot(data = insect_dose, mapping = aes(x = dose, y = prop_dead)) +
-  geom_point() +
-  geom_line(y = fitted(prop_lm), size = 1, colour = "blue") +
-  geom_line(y = fitted(loess_mod), size = 1, colour = "red") +
-  geom_abline(intercept = 0.59, slope = 0) +
-  geom_vline(xintercept = 1.7912) +
-  labs(
-    title = "LM regression vs ideal curve",
-    x = "Dose",
-    y = "Proportion dead"
-  )
-
-# Inspect fitted values
-predictions <- fitted(prop_lm)
-residuals <- rstudent(prop_lm) # studentised residuals
-lm_comp_df <- data.frame(
-  actual = insect_dose$prop_dead,
-  fitted = predictions,
-  studentised_residuals = residuals,
-  errors = insect_dose$prop_dead - predictions,
-  index = 1:8
+# Compare LM and LOESS fits
+p_comp <- compare_fits(prop_lm, loess_mod, insect_dose, "prop_dead", "dose",
+  title = "LM regression vs LOESS",
+  xlab = "Dose",
+  ylab = "Proportion dead",
+  model_1_name = "Linear model",
+  model_2_name = "LOESS"
 )
 
-lm_comp_df$errors / lm_comp_df$actual
+p_comp +
+  geom_abline(intercept = 0.59, slope = 0) +
+  geom_vline(xintercept = 1.7912)
 
-# Plot residuals
-ggplot(data = lm_comp_df, aes(x = index, y = studentised_residuals)) +
-  geom_point(colour = "blue") +
-  geom_abline(intercept = 0, slope = 0, colour = "red") +
-  geom_segment(xend = lm_comp_df$index, yend = 0) +
-  ylim(-3, 3) +
-  labs(
-    title = "Studentised residuals for LM regression",
-    x = "Index",
-    y = "Studentised residuals"
-  )
+# Inspect studentised residuals
+plot_studentised_residuals(prop_lm, insect_dose, "prop_dead",
+  title = "Studentised residuals for linear regression"
+)
 
 # Diagnostic plots
 autoplot(prop_lm, which = 1:6, label.size = 3)
@@ -178,18 +233,47 @@ multiplot(p_lm, p_loess, cols = 1)
 # === Logistic Regression ======================================================
 
 # Build a logistic regression model
-prop_log_reg <- glm(prop_dead ~ dose, family = binomial, data = insect_dose)
+prop_log_reg <- glm(cbind(num_died, num_alive) ~ dose,
+  family = binomial,
+  data = insect_dose
+)
+
 summary(prop_log_reg)
 
-
+# Graph of fit including errors
 p_log_reg <- plot_fitted_errors(prop_log_reg, insect_dose, "dose", "prop_dead",
   title = "Logistic regression",
   x_name = "Dose",
   y_name = "Proportion of sample dead"
 )
 
+p_log_reg
+
+# Compare LM and logistic fits
+p_comp_lm_lr <- compare_fits(prop_lm,
+  prop_log_reg,
+  insect_dose,
+  "prop_dead",
+  "dose",
+  title = "LM regression vs logistic regression",
+  xlab = "Dose",
+  ylab = "Proportion dead",
+  model_1_name = "Linear model",
+  model_2_name = "Logistic regression"
+)
+
+p_comp_lm_lr
+
+# Inspect studentised residuals
+plot_studentised_residuals(prop_log_reg, insect_dose, "prop_dead",
+  title = "Studentised residuals for logistic regression"
+)
+
+# Diagnostic plots
+autoplot(prop_log_reg, which = 1:6, label.size = 3)
+
 # Compare plot with LOESS regression and LM
-multiplot(p_log_reg, p_loess) # Note heavier tails in LOESS
+multiplot(p_log_reg, p_loess)
 multiplot(p_log_reg, p_lm)
 
 par(mfrow = c(3, 2))
@@ -210,7 +294,7 @@ comparison_table <- data.frame(
 # === Cloglog Regression =======================================================
 
 # Try a different link function (with heavier tails)
-cloglog_model <- glm(prop_dead ~ dose,
+cloglog_model <- glm(cbind(num_died, num_alive) ~ dose,
   family = binomial(link = "cloglog"),
   data = insect_dose
 )
@@ -223,6 +307,29 @@ p_cloglog <- plot_fitted_errors(cloglog_model, insect_dose, "dose", "prop_dead",
 
 # compare with logistic regression
 multiplot(p_log_reg, p_cloglog)
+
+# Compare logistic and cloglog fits
+p_comp_lr_cll <- compare_fits(prop_log_reg,
+  cloglog_model,
+  insect_dose,
+  "prop_dead",
+  "dose",
+  title = "Logistic regression vs cloglog regression",
+  xlab = "Dose",
+  ylab = "Proportion dead",
+  model_1_name = "Logistic regression",
+  model_2_name = "Cloglog regression"
+)
+
+p_comp_lr_cll
+
+# Inspect studentised residuals
+plot_studentised_residuals(cloglog_model, insect_dose, "prop_dead",
+  title = "Studentised residuals for cloglog regression"
+)
+
+# Diagnostic plots
+autoplot(cloglog_model, which = 1:6, label.size = 3)
 
 # === Comparison binomial models ===============================================
 
@@ -282,7 +389,7 @@ ggplot(data = smaller_table) +
 insect_dose %<>% mutate(dose_quad = dose * dose)
 
 # Build multivariate model
-prop_log_reg_multi <- glm(prop_dead ~ dose + dose_quad,
+prop_log_reg_multi <- glm(cbind(num_died, num_alive) ~ dose + dose_quad,
   data = insect_dose,
   family = binomial(link = "logit")
 )
@@ -293,6 +400,15 @@ anova(prop_log_reg, prop_log_reg_multi, test = "Chisq")
 
 # Compare non-nested models (use AIC)
 AIC(cloglog_model, prop_log_reg, prop_log_reg_multi) # Cloglog wins
+
+cloglog_model_multi <- update(
+  cloglog_model,
+  cbind(num_died, num_alive) ~ dose + dose_quad
+)
+
+AIC(cloglog_model, cloglog_model_multi, prop_log_reg, prop_log_reg_multi)
+cloglog_model$deviance
+cloglog_model_multi$deviance
 
 # Update the comparison table
 multi_comp_table <- data.frame(
@@ -312,4 +428,41 @@ ggplot(data = smaller_table) +
     title = "Distribution of errors for binomial models",
     x = "Error",
     y = "Density"
+  )
+
+
+# Let's look at MSE
+model_MSE <- smaller_table %>%
+  group_by(Model) %>%
+  summarise(MSE = mean(Error))
+
+
+# === Compare models outside given range =======================================
+
+# Compare models across extended range
+range_check <- data.frame(dose = seq(1.55, 1.95, 0.001))
+predicted_lm <- predict(prop_lm, range_check)
+predicted_logistic <- predict(prop_log_reg, range_check, type = "response")
+predicted_cloglog <- predict(cloglog_model, range_check, type = "response")
+
+model_comparison_df <- data.frame(
+  dose = range_check,
+  Linear.Model = predicted_lm,
+  Logistic.Model = predicted_logistic,
+  Cloglog.Model = predicted_cloglog
+) %>%
+  melt(id = c("dose")) %>%
+  rename(Model = variable, Predicted = value) %>%
+  mutate(Model = as.character(Model)) %>%
+  as.tibble()
+
+# Compare LM fit across a greater range
+ggplot(data = model_comparison_df, mapping = aes(x = dose)) +
+  geom_point(aes(y = Predicted, colour = Model), size = 0.5) +
+  geom_hline(yintercept = 0.0, lty = 2) +
+  geom_hline(yintercept = 1.0, lty = 2) +
+  labs(
+    title = "Model comparison across greater range",
+    x = "Dose",
+    y = "Proportion dead"
   )
